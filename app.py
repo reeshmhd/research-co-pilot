@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 from dotenv import load_dotenv
 
 from graph import build_graph
@@ -27,8 +28,11 @@ else:
             initial_state = {"topic": topic}
             
             try:
+                start_time = time.time()
                 final_state = app_graph.invoke(initial_state)
-                st.success("Research Complete!")
+                end_time = time.time()
+                latency = end_time - start_time
+                st.success(f"Research Complete! (Took {latency:.2f} seconds)")
                 
                 col1, col2 = st.columns([1, 2])
                 

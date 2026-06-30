@@ -5,13 +5,15 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from tools import search_arxiv, search_pubmed
+from tools import search_arxiv, search_pubmed, download_and_extract_pdf, create_faiss_retriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 class AgentState(TypedDict):
     topic: str
     search_strategy: str
     search_queries: List[str]
     raw_papers: List[Dict]
+    context_by_paper: Dict[str, List[str]]
     summaries: List[Dict]
     bibliography: str
 
@@ -58,27 +60,69 @@ def retriever_node(state: AgentState):
         
     papers = papers[:5]
     
-    return {"raw_papers": papers}
+    texts = []
+    metadatas = []
+    
+    for paper in papers:
+        text = ""
+        # ArXiv urls usually don't end in .pdf in the API, we need to append it or just try downloading. 
+        # arxiv tool in tools.py uses paper.pdf_url which is a valid pdf link.
+        if paper.get("source") == "arxiv" and paper.get("url"):
+            text = download_and_extract_pdf(paper["url"])
+            
+        if not text:
+            text = paper.get("abstract", "")
+            
+        if text:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            chunks = splitter.split_text(text)
+            for chunk in chunks:
+                texts.append(chunk)
+                metadatas.append({"title": paper["title"]})
+                
+    context_by_paper = {}
+    if texts:
+        # Increase k to get more context across up to 5 papers
+        retriever = create_faiss_retriever(texts, metadatas)
+        if retriever:
+            retriever.search_kwargs = {"k": 15}
+            query_str = f"methodology and datasets for {state['topic']}"
+            relevant_docs = retriever.invoke(query_str)
+            
+            for doc in relevant_docs:
+                title = doc.metadata["title"]
+                if title not in context_by_paper:
+                    context_by_paper[title] = []
+                context_by_paper[title].append(doc.page_content)
+                
+    return {"raw_papers": papers, "context_by_paper": context_by_paper}
 
 def summarizer_node(state: AgentState):
     papers = state.get("raw_papers", [])
+    context_by_paper = state.get("context_by_paper", {})
     if not papers:
         return {"summaries": []}
         
     llm = ChatGroq(model="llama3-70b-8192", temperature=0)
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are an expert methodology extractor. Given an abstract, concisely summarize the methodology used and extract any mentioned datasets."),
-        ("user", "Abstract: {abstract}")
+        ("system", "You are an expert methodology extractor. Given the following context from a paper, concisely summarize the methodology used and extract any mentioned datasets."),
+        ("user", "Context: {context}")
     ])
     
     chain = prompt | llm.with_structured_output(ExtractionSummary)
     
     summaries = []
     for paper in papers:
-        if paper.get("abstract"):
+        title = paper["title"]
+        chunks = context_by_paper.get(title, [])
+        if not chunks and paper.get("abstract"):
+            chunks = [paper["abstract"]]
+            
+        if chunks:
+            context_text = "\n\n...\n\n".join(chunks)
             try:
-                res = chain.invoke({"abstract": paper["abstract"]})
+                res = chain.invoke({"context": context_text})
                 summary_data = {
                     "methodology": res.methodology,
                     "datasets": res.datasets,

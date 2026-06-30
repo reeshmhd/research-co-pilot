@@ -6,7 +6,7 @@ An intelligent agentic workflow designed to streamline academic research by auto
 
 - **Agentic Workflows (LangGraph)**: The application is built on a state-based graph architecture, where specific LLM nodes handle distinct parts of the pipeline (Orchestrator, Retriever, Summarizer, Bibliography).
 - **Intent Classification & Routing**: The system doesn't just blindly search. It uses an LLM-powered orchestrator to classify the user's intent and dynamically decide the best search strategy (querying `arXiv` for physics/CS/math, `PubMed` for medicine/biology, or `both`). It also generates optimized search queries based on the raw input.
-- **Retrieval-Augmented Generation (RAG)**: Connects real-time academic databases (arXiv, PubMed) to the LLM. This grounds the extraction process in factual, up-to-date research papers rather than relying solely on the LLM's pre-trained (and potentially hallucinated) knowledge.
+- **Retrieval-Augmented Generation (RAG)**: Connects real-time academic databases (arXiv, PubMed) to the LLM. For arXiv papers, it downloads the full PDFs, extracts and chunks the text, and generates dense vector embeddings using **Hugging Face's `all-MiniLM-L6-v2`**. These are indexed in a **FAISS** vector database for deep semantic retrieval.
 - **Structured Information Extraction**: Uses LangChain's structured output capabilities (backed by Pydantic schemas) to force the LLM to consistently extract specific fields—namely `methodology` and `datasets`—from dense academic abstracts.
 - **Observability (LangSmith)**: Compatible with LangSmith for deep tracing of the LangGraph execution, allowing visibility into the LLM calls, latency, intent classification routing decisions, and token usage.
 
@@ -16,6 +16,7 @@ An intelligent agentic workflow designed to streamline academic research by auto
 - **Large Language Models (LLMs)**: [Groq](https://groq.com/) (`llama-3.3-70b-versatile` for orchestration, `llama3-70b-8192` for extraction)
 - **User Interface**: [Streamlit](https://streamlit.io/)
 - **Data Sources / APIs**: `arxiv` API, `BioPython` (Entrez / PubMed API)
+- **Vector Database & Embeddings**: FAISS & Hugging Face (`all-MiniLM-L6-v2`)
 - **Data Validation**: Pydantic
 
 ## 🔄 System Architecture & Flow
@@ -57,7 +58,8 @@ graph TD
    - It outputs a Pydantic `SearchStrategy` object, selecting the target database (`arxiv`, `pubmed`, or `both`) and generating optimized search queries.
 3. **Retriever Node**: 
    - Takes the optimized queries and queries the selected APIs.
-   - Fetches up to 5 relevant papers and stores their metadata and abstracts in the graph state.
+   - Fetches up to 5 relevant papers and stores their metadata.
+   - Downloads full-text PDFs (if available), chunks the text, and builds an ephemeral FAISS vector index using Hugging Face embeddings to extract highly relevant context.
 4. **Summarizer Node**: 
    - A `llama3-70b-8192` model iterates through the retrieved abstracts.
    - Using a strict `ExtractionSummary` Pydantic schema, it pulls out the specific methodologies used and any datasets explicitly mentioned.

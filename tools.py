@@ -1,6 +1,13 @@
 import arxiv
 from Bio import Entrez
 import datetime
+import requests
+import tempfile
+import os
+from pypdf import PdfReader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Always set an email for Entrez to avoid being blocked
 Entrez.email = "reesh9805@gmail.com" 
@@ -87,3 +94,34 @@ def search_pubmed(query: str, max_results: int = 5) -> list[dict]:
         print(f"Error fetching from pubmed: {e}")
         
     return results
+
+def download_and_extract_pdf(url: str) -> str:
+    """Download a PDF from a URL and extract its text."""
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+            temp_pdf.write(response.content)
+            temp_pdf_path = temp_pdf.name
+            
+        reader = PdfReader(temp_pdf_path)
+        text = ""
+        for page in reader.pages:
+            if page.extract_text():
+                text += page.extract_text() + "\n"
+            
+        os.unlink(temp_pdf_path)
+        return text
+    except Exception as e:
+        print(f"Error downloading or extracting PDF from {url}: {e}")
+        return ""
+
+def create_faiss_retriever(texts: list[str], metadatas: list[dict]):
+    """Create a FAISS vectorstore from text chunks and return a retriever."""
+    if not texts:
+        return None
+        
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_texts(texts, embedding=embeddings, metadatas=metadatas)
+    return vectorstore.as_retriever(search_kwargs={"k": 3})
